@@ -1,0 +1,623 @@
+---
+title: "Models, Graphics and LinAlg"
+author: "Gurleen Kaur(300327252)"
+date: "30/01/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE}
+
+library(tidyverse)
+
+library(visdat)
+
+library(rsample)
+
+library(recipes)
+
+library(caret)
+
+library(matlib)
+
+library(pracma)
+
+library(EigenR)
+
+library(Matrix)
+
+library(psych)
+
+```
+
+
+# Introduction
+
+Housing costs play a significant role in decision-making at all levels, from recent graduates to policymakers. This study is carried out on housing data in order to forecast home prices.
+
+
+
+# 1 Modeling
+
+# 1.1 Cleaning and preparing
+
+
+```{r}
+
+#replacing blanks with NA's
+
+housingdata <- read.csv( "housingdata.csv",na.strings = c("", "NA"))
+
+
+
+# deleting irrelevant columns
+
+housingdata <- housingdata %>%
+              select(-c(Order,PID,X,X.1)) %>% 
+              rename(unknown_variable = X.2)
+
+# converting characters into factors
+
+housingdata<- as.data.frame(unclass(housingdata),stringsAsFactors=TRUE)
+
+
+```
+
+
+# Exploratory Data Analysis
+
+# Overview of the Dataset
+
+It can be seen this data set has 2930 rows and 80 columns. An overview of variables can be seen below:
+
+```{r}
+
+# Dimensions and column names of dataset
+
+dim(housingdata)
+
+# Nature of Variables
+
+str(housingdata)
+
+
+```
+
+Taking a step further, I decided to see how the ground living area impacts sale price of a house.
+
+```{r}
+
+
+options(scipen = 1000000)
+
+plot ( x = housingdata$Gr.Liv.Area, y = housingdata$SalePrice, 
+       xlab = "Ground living area", ylab = "Sale price" )
+
+
+```
+
+The above scatter plot reveals that as ground living area increased sale price of a house also increased.
+
+
+
+Investigating the age of the homes sold could be instructive. The great majority of houses were built between 1950 and 2010, as shown in the figure below. A significant drop occurs in the 1980s, which can be ascribed to fewer homes being built during that time period due to the housing market meltdown. Some of the houses were constructed over a century ago. The majority of the houses were constructed in the year 2000.
+
+
+```{r}
+
+hist(housingdata$Year.Built, main = "Year Of Construction of the houses sold",
+       xlab = " year built", ylab = "count")
+
+```
+
+Following this, I wanted to explore number of NA's in the dataset.
+
+```{r}
+
+# Number Of NA's in data
+
+sum(is.na(housingdata))
+
+
+```
+
+# Visualising Missing Data
+
+After examining the visualization of missing data, I came across many columns which have missing values for which I will use bag impute to impute numerical data as it will impute missing values by taking into consideration all actual values, which will be a good estimate for imputing missing values. And, for categorical data will do mode imputation, which will fill missing values according to most often occurring categorical values. For label encoding, will choose step integer which will keep my dimensions of data set the same and will convert data into a set of integers based on the levels of categorical data. 
+
+
+```{r, fig.width=15}
+
+# visualization Of missing data
+
+vis_missingdata <- vis_miss(housingdata)
+
+vis_missingdata
+
+```
+
+
+There is a need for transforming sale price as we can see from the histogram it is skewed to one side. Transformation can help in making our predictions better and can make sales price distribution normal.
+
+
+```{r}
+
+#Visualising Sale Price
+
+options(scipen = 100000)
+
+hist ( housingdata$SalePrice, main = "Histogram of sale price",
+       xlab = "Sale Price", ylab = "Frequency" )
+
+#log transformation of saleprice
+
+saleprice_transformed <- log(housingdata$SalePrice)
+
+#normally distributed saleprice
+
+hist(saleprice_transformed, main = "Histogram of sale price",
+       xlab = " Transformed Sale Price", ylab = "Frequency")
+
+```
+
+
+# 1.2 Design
+
+```{r, message=FALSE}
+
+#Splitting data
+
+set.seed(123)
+house_split <- initial_split( data = housingdata, prop = 7/10)
+
+#Training data
+
+house_train <- training(house_split)
+
+#Testing data
+
+house_test <- testing(house_split)
+
+
+
+#preprocessing data
+
+house_blueprint <- recipe(SalePrice~., data = house_train) %>%
+  
+                   step_nzv(all_predictors()) %>%
+  
+                   step_impute_bag(all_numeric_predictors()) %>%
+  
+                   step_impute_mode(all_nominal_predictors()) %>%
+  
+                   step_integer(all_nominal_predictors()) %>%
+  
+                   step_log(all_outcomes()) %>%
+  
+                   step_center(all_numeric_predictors(),-Garage.Yr.Blt,-Yr.Sold,
+                               -Year.Built,                                 
+                               -Year.Remod.Add) %>%
+  
+                   step_scale(all_numeric_predictors(),-Garage.Yr.Blt,-Yr.Sold,
+                              -Year.Built,-Year.Remod.Add)
+
+
+#filtering near zero variance
+
+caret::nearZeroVar(house_train, saveMetrics= TRUE) %>% filter(nzv)
+
+
+prepare_house_train <- prep( x =  house_blueprint, training = house_train)
+
+#baked data
+
+bake_house_train <- bake( object = prepare_house_train, new_data = house_train)
+
+Untransformed_saleprice <- exp(bake_house_train$SalePrice)
+
+
+```
+
+
+
+```{r}
+
+cross_validation <- trainControl(method = "repeatedcv",number = 10,repeats = 5 )
+
+
+grid_search <- expand.grid(k = seq(5, 15, by = 1))
+
+```
+
+Difference between random grid search and grid search is in random search from range of possible hyperparameter values any value of hyperparameter is randomly selected and explored but in grid search it searches across many hyperparameter values and gives the average error rate of each parameter value in order to minimize the error. 
+
+
+For train control function there are various resampling methods available like cv(cross-validation), repeated cv(repeated cross-validation), boot, boot632, optimism boot, boot_all, LOOCV, LGOCV, timeslice, adaptive_cv.
+
+
+
+# 1.3 Fitting
+
+```{r}
+
+
+knn_model_a1 <- train(SalePrice~.,data = bake_house_train,method = "knn",
+                   trControl = cross_validation, tuneGrid = grid_search,
+                   metric = "RMSE")
+
+knn_model_a1
+
+
+plot(knn_model_a1)
+
+```
+
+The optimal model is found at k = 6, which means model will make a prediction for a given observation based on the average of the response values for the 6 observations in the training data most similar to the observation being predicted.
+
+I used Root mean squared error metric and objective is to minimize it. There are many other metrics available like MSE, MAE, RMSLE, R squared. Yes, I tried other metrics as well. There wasn't any difference in the results given by these metrics all gave the same value for k except the R squared, which gave value of k as 8.
+
+```{r}
+
+knn_model_a2 <- train(SalePrice~.,data = bake_house_train,method = "knn",
+                   trControl = cross_validation, tuneGrid = grid_search,
+                   metric = "Rsquared")
+
+knn_model_a2
+
+
+plot(knn_model_a2)
+
+
+knn_model_a3 <- train(SalePrice~.,data = bake_house_train,method = "knn",
+                   trControl = cross_validation, tuneGrid = grid_search,
+                   metric = "MAE")
+
+knn_model_a3 
+
+plot(knn_model_a3)
+
+```
+
+# 1.4 Final Testing
+
+
+```{r}
+
+
+bake_house_test <- bake(prepare_house_train,new_data = house_test)
+
+
+Untransformed_sale_price <- exp(bake_house_test$SalePrice)
+
+
+
+
+#predicting sale price
+
+Predicted_saleprice <- predict(knn_model_a1,bake_house_test)
+
+
+bake_house_test <- bake_house_test %>% 
+                   mutate(Residuals = SalePrice - Predicted_saleprice, 
+                          Predicted_saleprice)
+
+# plotting residuals
+
+ggplot(data=bake_house_test,mapping = aes(x=Predicted_saleprice,y=Residuals)) +
+         geom_point()
+
+
+#summary of residuals
+
+summary(bake_house_test$Residuals)
+
+```
+
+From the above plot, we can see that there is a random scatterness in the plot which is also known as homoscedasticity which is good for the model.  
+
+
+# 2 Graphical Exploration
+
+
+# Introduction
+
+Gdp, fertlity rate, infant mortality do have an impact on global policies.Global policies are made taking into consideration these factors.
+
+For this purpose, analysis is done on Global Economic and Social data. Various relationships between variable is explored to determine the changes needed in global polcies or not.
+
+
+```{r}
+
+global_economic <- read.csv("global economic.csv")
+
+
+#imputing missing values
+
+global_economic$infant_mortality[is.na(global_economic$infant_mortality)] <-
+  median(global_economic$infant_mortality,na.rm = TRUE)
+
+global_economic$gdp[is.na(global_economic$gdp)] <- 
+  median(global_economic$gdp,na.rm = TRUE)
+
+global_economic$fertility[is.na(global_economic$fertility)] <- median(global_economic$fertility,na.rm = TRUE)
+
+
+# scaling  numerical data
+
+global_economic_scaled <- scale(global_economic[3:7], center=TRUE, scale=TRUE)
+
+global_economic_scaled <- as.data.frame(global_economic_scaled )
+
+
+global_economic_2 <- global_economic %>%                                                                                 mutate(global_economic_scaled)
+```
+
+
+
+```{r}
+
+updated_global_economic <- global_economic_2 %>% 
+  
+                          group_by(year,region) %>%
+  
+                      summarise(Total_infant_mortality = sum(infant_mortality),
+                                    
+                      Total_gdp = sum(gdp),Total_fertility = sum(fertility),
+                           
+                      Total_life_expectency = sum(life_expectancy))
+
+```
+
+From the below given graph, we can see that year after year infant mortality keeps on getting  decreasing for different regions that is Eastern Africa, South America, Southern Asia, Western Africa and Western Asia. It was stable for Australia and New Zealand, Micronesia and Polynesia.
+
+
+```{r, fig.width=10}
+
+visual_mortality <- ggplot( data = updated_global_economic) +
+                    geom_line( mapping = aes( x = year, y = Total_infant_mortality)) +
+                             facet_wrap(~region)
+
+visual_mortality
+
+```
+
+
+After examining this plot, we can see that as we move on gdp keeps on growing for various regions.
+For those regions who have stable GDP, government can spend on improving infrastructure and can provide tax cuts and rebates.
+
+```{r, fig.width=10, warning=FALSE, message=FALSE}
+
+visual_gdp <- ggplot( data = updated_global_economic) +
+  
+  geom_line( mapping = aes( x = year, y = Total_gdp)) +
+           
+             facet_wrap(~region)
+visual_gdp
+
+
+```
+
+
+Year after year we can see there is a dip in the fertility rate. For that specific measures or policies  can be made  by government to increase fertility rate like baby bonuses, family allowances, maternal, paternal and parental leave, tax incentives and flexible work schedules.
+
+```{r, fig.width=10}
+
+
+
+visual_fertility <- ggplot( data = updated_global_economic  ) +
+  
+  geom_line( mapping = aes( x = year, y = Total_fertility)) +
+   facet_wrap(~region)
+
+visual_fertility
+
+```
+
+
+```{r, fig.width=10}
+
+ pairs.panels(global_economic[3:7])
+
+```
+
+From the above diagram, we can see that there exists a negative correlation among infant mortality, fertility and life expectancy.
+
+
+
+To have a more closer look, we can have a look at the ggplot:
+
+As life expectency increases, there is a  significant drop in infant mortality which confirms that there exists a negative relationship between them.
+
+```{r}
+
+
+ggplot( data = updated_global_economic  ) +
+  
+  geom_point( mapping = aes( x =  Total_life_expectency, y = Total_infant_mortality)) 
+  
+  
+
+
+
+```
+
+```{r}
+
+gdp_transformed <- global_economic %>% mutate(gdp_per_capita = (gdp/population)/365 )
+
+
+```
+
+
+# 3 Linear Algebra
+
+# 3.1
+
+$$\begin{array}{cc}
+2x+3y& =4\\
+x-2y& =3
+\end{array} $$
+
+
+Ans:
+
+x= 17/7
+y= -2/7
+
+
+```{r}
+
+Matrix_A <- matrix(data=c(2,1,3,-2),nrow=2,ncol=2)
+
+Matrix_A
+
+#determinant of matrix
+
+det(Matrix_A)
+
+#inverse
+
+matrix_inverse <- inv(Matrix_A)
+
+matrix_inverse
+ 
+
+b <- matrix(data = c(4,3),nrow = 2, ncol = 1)
+b
+
+solving_matrix <- matrix_inverse %*% b
+
+solving_matrix
+
+```
+
+The determinant of matrix is not equal to zero which means that this matrix is invertible or this matrix transformation can be undone.
+
+
+
+# 3.3
+
+```{r}
+
+Matrix_B <- matrix(data=c(1,2,3,-6),nrow=2,ncol=2)
+
+nullspace(Matrix_B)
+
+```
+
+# 3.4
+
+
+```{r}
+
+Matrix_B <- matrix(data=c(1,2,3,-6),nrow=2,ncol=2)
+
+Matrix_B
+
+x <- Matrix_A %*% Matrix_B
+
+x
+
+# 2 non zero rows
+rref(x)
+
+rankMatrix(x)
+
+```
+# 3.5
+
+```{r}
+
+eigen <- eigen(Matrix_A)
+
+eigen
+
+
+Matrix_A %*% eigen$vectors
+
+```
+
+
+When we multiply matrix A with the eigen vectors it does not change it's directions but only scales it.
+
+
+# 4 PCA using the Social Data
+
+# 4.1
+
+```{r, message=FALSE, warning=FALSE}
+
+Youth_data <- read_csv("youthsocialnetworking.csv")
+
+
+
+Youth_data$age[is.na(Youth_data$age)] <- median(Youth_data$age,na.rm = TRUE)
+
+
+
+```
+
+# 4.3
+
+```{r}
+
+#removing grad year and age dependent variable
+
+Youth_data_1 <- Youth_data[-1,-2]
+
+scaled_youth <- scale(Youth_data_1,center = TRUE,scale = TRUE)
+
+covarince_matrix <- cov(scaled_youth)
+
+eigen_matrix <- eigen(covarince_matrix)
+
+```
+
+# 4.5
+
+```{r, fig.width=10}
+
+PCA <- prcomp(Youth_data_1, center = TRUE, scale = TRUE)
+
+
+
+summary(PCA)
+
+
+```
+
+
+
+# 4.6
+
+```{r, fig.width=10}
+
+library(ggplot2)
+library(ggfortify)
+
+
+
+screeplot(PCA, type = "barplot")
+
+
+
+autoplot(PCA, loadings = TRUE, loadings.colour = 'blue',
+        loadings.label = TRUE, loadings.label.size = 4)
+
+
+
+```
+
+
+
+# 4.7
+
+
+PCA focuses on narrowing the feature space, allowing the majority of the information or variability in the data set to be explained with fewer features; in the case of PCA, these new features will also be uncorrelated. This can aid in the description of numerous aspects in our data collection, as well as the removal of multicollinearity, which can increase forecast accuracy.Naturally, the first PC (PC1) captures the greatest amount of variation, followed by PC2, PC3, and so on.
+
+
+The PVE for each individual PC is displayed on a scree plot. The majority of scree plots have a similar form, starting high on the left, quickly descending, and then levelling out at some point. This is because the first component typically explains a large portion of the variability, the next few components a moderate proportion, and the final components only explain a small portion of the overall variability.
+
